@@ -664,7 +664,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
             {
               reasoningConfig: {
                 type: "adaptive",
-                maxReasoningEffort: effort,
+                maxReasoningEffort: effort === "xhigh" ? "max" : effort,
               },
             },
           ]),

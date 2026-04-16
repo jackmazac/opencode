@@ -2768,7 +2768,7 @@ describe("ProviderTransform.variants", () => {
       })
     })
 
-    test("anthropic opus 4.7 returns adaptive reasoning options with xhigh", () => {
+    test("anthropic opus 4.7 returns adaptive reasoning options with xhigh mapped to max", () => {
       const model = createMockModel({
         id: "bedrock/anthropic-claude-opus-4-7",
         providerID: "bedrock",
@@ -2783,7 +2783,7 @@ describe("ProviderTransform.variants", () => {
       expect(result.xhigh).toEqual({
         reasoningConfig: {
           type: "adaptive",
-          maxReasoningEffort: "xhigh",
+          maxReasoningEffort: "max",
         },
       })
       expect(result.max).toEqual({
