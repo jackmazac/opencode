@@ -792,7 +792,7 @@ export namespace MessageV2 {
               })
           }
           if (part.type === "reasoning") {
-            if (options?.stripReasoning) continue
+            if (options?.stripReasoning || differentModel) continue
             assistantMessage.parts.push({
               type: "reasoning",
               text: part.text,
