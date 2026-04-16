@@ -585,7 +585,7 @@ export namespace MessageV2 {
   export const toModelMessagesEffect = Effect.fnUntraced(function* (
     input: WithParts[],
     model: Provider.Model,
-    options?: { stripMedia?: boolean },
+    options?: { stripMedia?: boolean; stripReasoning?: boolean },
   ) {
     const result: UIMessage[] = []
     const toolNames = new Set<string>()
@@ -792,6 +792,7 @@ export namespace MessageV2 {
               })
           }
           if (part.type === "reasoning") {
+            if (options?.stripReasoning) continue
             assistantMessage.parts.push({
               type: "reasoning",
               text: part.text,
@@ -840,7 +841,7 @@ export namespace MessageV2 {
   export function toModelMessages(
     input: WithParts[],
     model: Provider.Model,
-    options?: { stripMedia?: boolean },
+    options?: { stripMedia?: boolean; stripReasoning?: boolean },
   ): Promise<ModelMessage[]> {
     return Effect.runPromise(toModelMessagesEffect(input, model, options).pipe(Effect.provide(EffectLogger.layer)))
   }

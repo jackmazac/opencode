@@ -216,7 +216,7 @@ When constructing the summary, try to stick to this template:
         const prompt = compacting.prompt ?? [defaultPrompt, ...compacting.context].join("\n\n")
         const msgs = structuredClone(messages)
         yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-        const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: true })
+        const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: true, stripReasoning: true })
         const ctx = yield* InstanceState.context
         const msg: MessageV2.Assistant = {
           id: MessageID.ascending(),

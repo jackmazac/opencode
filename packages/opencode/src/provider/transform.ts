@@ -175,6 +175,45 @@ function normalizeMessages(
     return result
   }
 
+  if (
+    model.api.npm === "@ai-sdk/amazon-bedrock" &&
+    !model.api.id.includes("anthropic") &&
+    !model.api.id.includes("mistral")
+  ) {
+    const keys = ["bedrock", model.providerID]
+    const strip = (opts: Record<string, any> | undefined): Record<string, any> | undefined => {
+      if (!opts) return opts
+      let out = opts
+      for (const k of keys) {
+        if (out[k]?.cachePoint) {
+          const { cachePoint: _, ...rest } = out[k]
+          out = { ...out, [k]: Object.keys(rest).length > 0 ? rest : undefined }
+        }
+      }
+      return out
+    }
+    return msgs.map((msg) => {
+      let content = msg.content
+      if (msg.role === "assistant" && Array.isArray(content)) {
+        content = content.filter(
+          (part: any) => part.type !== "reasoning" && part.type !== "redacted-reasoning",
+        ) as typeof content
+        if (content.length === 0)
+          content = [{ type: "text" as const, text: "..." }] as typeof content
+      }
+      if (Array.isArray(content)) {
+        content = content.map((part: any) => {
+          const cleaned = strip(part.providerOptions)
+          return cleaned !== part.providerOptions ? { ...part, providerOptions: cleaned } : part
+        }) as typeof content
+      }
+      const cleaned = strip(msg.providerOptions as Record<string, any> | undefined)
+      if (content !== msg.content || cleaned !== msg.providerOptions)
+        return { ...msg, content, providerOptions: cleaned } as typeof msg
+      return msg
+    })
+  }
+
   if (typeof model.capabilities.interleaved === "object" && model.capabilities.interleaved.field) {
     const field = model.capabilities.interleaved.field
     return msgs.map((msg) => {
