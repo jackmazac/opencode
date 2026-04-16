@@ -977,12 +977,14 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
 
 const BEDROCK_1M_MODELS = ["claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-4-5", "claude-sonnet-4-6"]
 const BEDROCK_1M_BETA = "context-1m-2025-08-07"
+const BEDROCK_1M_NATIVE = ["claude-opus-4-7"]
 
 function splitBedrock1m(pid: string, models: Record<string, Model>) {
   if (pid !== "amazon-bedrock") return
   for (const [id, model] of Object.entries(models)) {
     if (!BEDROCK_1M_MODELS.some((m) => model.api.id.includes(m))) continue
     if (id.endsWith("-1m")) continue
+    const native = BEDROCK_1M_NATIVE.some((m) => model.api.id.includes(m))
     const name = model.name.replace(/\s+\((200K|1M Experimental)\)$/i, "")
     const opts = { ...model.options }
     const raw = opts["anthropicBeta"]
@@ -993,12 +995,13 @@ function splitBedrock1m(pid: string, models: Record<string, Model>) {
     model.name = `${name} (200K)`
     model.options = opts
     model.limit = { ...model.limit, context: Math.min(model.limit.context, 200_000) }
+    const betas = native ? existing : [...new Set([...existing, BEDROCK_1M_BETA])]
     models[`${id}-1m`] = {
       ...model,
       id: ModelID.make(`${id}-1m`),
       name: `${name} (1M)`,
       limit: { ...model.limit, context: 1_000_000 },
-      options: { ...model.options, anthropicBeta: [...new Set([...existing, BEDROCK_1M_BETA])] },
+      options: { ...model.options, ...(betas.length > 0 ? { anthropicBeta: betas } : {}) },
     }
   }
 }
