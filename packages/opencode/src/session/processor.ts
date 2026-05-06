@@ -457,11 +457,13 @@ export const layer: Layer.Layer<
               usage: value.usage,
               metadata: value.providerMetadata,
             })
+            const rawFinish = typeof value.rawFinishReason === "string" ? value.rawFinishReason : undefined
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               EventV2.run(SessionEvent.Step.Ended.Sync, {
                 sessionID: ctx.sessionID,
                 finish: value.finishReason,
+                ...(rawFinish !== undefined ? { rawFinish } : {}),
                 cost: usage.cost,
                 tokens: usage.tokens,
                 snapshot: completedSnapshot,
@@ -474,6 +476,7 @@ export const layer: Layer.Layer<
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.finishReason,
+              ...(rawFinish !== undefined ? { rawReason: rawFinish } : {}),
               snapshot: completedSnapshot,
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,

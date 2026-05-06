@@ -299,6 +299,45 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
   })
 }
 
+function createAnthropicMessageChunks(input: { modelID: string; text: string; stopReason: string; messageID: string }) {
+  return [
+    {
+      type: "message_start",
+      message: {
+        id: input.messageID,
+        model: input.modelID,
+        usage: {
+          input_tokens: 3,
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+        },
+      },
+    },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: input.text },
+    },
+    { type: "content_block_stop", index: 0 },
+    {
+      type: "message_delta",
+      delta: { stop_reason: input.stopReason, stop_sequence: null, container: null },
+      usage: {
+        input_tokens: 3,
+        output_tokens: 2,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+      },
+    },
+    { type: "message_stop" },
+  ]
+}
+
 describe("session.llm.stream", () => {
   test("sends temperature, tokens, and reasoning options for openai-compatible models", async () => {
     const server = state.server
@@ -1169,6 +1208,203 @@ describe("session.llm.stream", () => {
             ],
           },
         ])
+      },
+    })
+  })
+
+  test("continues Anthropic pause_turn responses by appending response messages", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const source = await loadFixture("anthropic", "claude-opus-4-6")
+    const model = source.model
+    const firstRequest = waitRequest(
+      "/messages",
+      createEventResponse(
+        createAnthropicMessageChunks({
+          modelID: model.id,
+          text: "I need another server-tool iteration.",
+          stopReason: "pause_turn",
+          messageID: "msg-pause",
+        }),
+      ),
+    )
+    const secondRequest = waitRequest(
+      "/messages",
+      createEventResponse(
+        createAnthropicMessageChunks({
+          modelID: model.id,
+          text: "done",
+          stopReason: "end_turn",
+          messageID: "msg-done",
+        }),
+      ),
+    )
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: ["anthropic"],
+            provider: {
+              anthropic: {
+                name: "Anthropic",
+                env: ["ANTHROPIC_API_KEY"],
+                npm: "@ai-sdk/anthropic",
+                api: "https://api.anthropic.com/v1",
+                models: {
+                  [model.id]: model,
+                },
+                options: {
+                  apiKey: "test-anthropic-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await getModel(ProviderID.make("anthropic"), ModelID.make(model.id))
+        const sessionID = SessionID.make("session-test-anthropic-pause-turn")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const user = {
+          id: MessageID.make("user-anthropic-pause-turn"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.make("anthropic"), modelID: resolved.id, variant: "max" },
+        } satisfies MessageV2.User
+
+        await drain({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: [],
+          messages: [{ role: "user", content: "Continue server-side work" }],
+          tools: {},
+        })
+
+        await firstRequest
+        const second = await Promise.race([secondRequest, timeout(500)])
+        expect(second.url.pathname.endsWith("/messages")).toBe(true)
+        expect(second.body.messages).toEqual([
+          {
+            role: "user",
+            content: [{ type: "text", text: "Continue server-side work", cache_control: { type: "ephemeral" } }],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "I need another server-tool iteration.",
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+        ])
+      },
+    })
+  })
+
+  test("stops Anthropic pause_turn continuation with a diagnostic after the cap", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const source = await loadFixture("anthropic", "claude-opus-4-6")
+    const model = source.model
+    const requests = Array.from({ length: 4 }, (_, index) =>
+      waitRequest(
+        "/messages",
+        createEventResponse(
+          createAnthropicMessageChunks({
+            modelID: model.id,
+            text: `pause ${index}`,
+            stopReason: "pause_turn",
+            messageID: `msg-pause-${index}`,
+          }),
+        ),
+      ),
+    )
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: ["anthropic"],
+            provider: {
+              anthropic: {
+                name: "Anthropic",
+                env: ["ANTHROPIC_API_KEY"],
+                npm: "@ai-sdk/anthropic",
+                api: "https://api.anthropic.com/v1",
+                models: {
+                  [model.id]: model,
+                },
+                options: {
+                  apiKey: "test-anthropic-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await getModel(ProviderID.make("anthropic"), ModelID.make(model.id))
+        const sessionID = SessionID.make("session-test-anthropic-pause-turn-cap")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const user = {
+          id: MessageID.make("user-anthropic-pause-turn-cap"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.make("anthropic"), modelID: resolved.id, variant: "max" },
+        } satisfies MessageV2.User
+
+        await expect(
+          drain({
+            user,
+            sessionID,
+            model: resolved,
+            agent,
+            system: [],
+            messages: [{ role: "user", content: "Loop forever" }],
+            tools: {},
+          }),
+        ).rejects.toThrow("Anthropic pause_turn did not complete after 3 continuations")
+
+        await Promise.all(requests)
       },
     })
   })

@@ -27,6 +27,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+const PAUSE_TURN_CONTINUATION_MAX = 3
 type Result = Awaited<ReturnType<typeof streamText>>
 
 // Avoid re-instantiating remeda's deep merge types in this hot LLM path; the runtime behavior is still mergeDeep.
@@ -50,6 +51,7 @@ export type StreamInput = {
 
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
+  pauseTurnContinuation?: number
 }
 
 export type Event = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
@@ -85,6 +87,7 @@ const live: Layer.Layer<
       l.info("stream", {
         modelID: input.model.id,
         providerID: input.model.providerID,
+        pauseTurnContinuation: input.pauseTurnContinuation ?? 0,
       })
 
       const [language, cfg, item, info] = yield* Effect.all(
@@ -410,10 +413,62 @@ const live: Layer.Layer<
           metadata: {
             userId: cfg.username ?? "unknown",
             sessionId: input.sessionID,
+            pauseTurnContinuation: input.pauseTurnContinuation ?? 0,
           },
         },
       })
     })
+
+    function continuePauseTurn(
+      input: StreamRequest,
+      messages: ModelMessage[],
+      continuation: number,
+    ): Effect.Effect<Stream.Stream<Event, unknown>, unknown> {
+      return Effect.gen(function* () {
+        const result = yield* run({ ...input, messages, pauseTurnContinuation: continuation })
+        let rawFinishReason: string | undefined
+        const current = Stream.fromAsyncIterable(result.fullStream, (e) =>
+          e instanceof Error ? e : new Error(String(e)),
+        ).pipe(
+          Stream.tap((event) =>
+            Effect.sync(() => {
+              if (event.type === "finish-step" && typeof event.rawFinishReason === "string") {
+                rawFinishReason = event.rawFinishReason
+              }
+            }),
+          ),
+        )
+        const next = Stream.unwrap(
+          Effect.gen(function* () {
+            if (rawFinishReason !== "pause_turn") return Stream.empty
+            if (continuation >= PAUSE_TURN_CONTINUATION_MAX) {
+              log.error("anthropic pause_turn continuation limit reached", {
+                sessionID: input.sessionID,
+                modelID: input.model.id,
+                providerID: input.model.providerID,
+                continuation,
+                max: PAUSE_TURN_CONTINUATION_MAX,
+              })
+              return Stream.fail(
+                new Error(
+                  `Anthropic pause_turn did not complete after ${PAUSE_TURN_CONTINUATION_MAX} continuations. The provider-side server-tool loop may be stuck; retry or lower the model effort.`,
+                ),
+              )
+            }
+            log.info("continuing anthropic pause_turn", {
+              sessionID: input.sessionID,
+              modelID: input.model.id,
+              providerID: input.model.providerID,
+              continuation: continuation + 1,
+              max: PAUSE_TURN_CONTINUATION_MAX,
+            })
+            const response = yield* Effect.promise(() => result.response)
+            return yield* continuePauseTurn(input, [...messages, ...response.messages], continuation + 1)
+          }),
+        )
+        return Stream.concat(current, next)
+      })
+    }
 
     const stream: Interface["stream"] = (input) =>
       Stream.scoped(
@@ -424,9 +479,7 @@ const live: Layer.Layer<
               (ctrl) => Effect.sync(() => ctrl.abort()),
             )
 
-            const result = yield* run({ ...input, abort: ctrl.signal })
-
-            return Stream.fromAsyncIterable(result.fullStream, (e) => (e instanceof Error ? e : new Error(String(e))))
+            return yield* continuePauseTurn({ ...input, abort: ctrl.signal }, input.messages, 0)
           }),
         ),
       )

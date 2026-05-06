@@ -77,6 +77,7 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
+const PROMPT_PAUSE_TURN_RETRY_MAX = 3
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -1436,10 +1437,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           // provider's stream (e.g. DWS Agent Platform) and don't need a re-loop.
           const hasToolCalls =
             lastAssistantMsg?.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted) ?? false
+          const pauseTurnFinishes =
+            lastAssistantMsg?.parts.filter((part) => part.type === "step-finish" && part.rawReason === "pause_turn")
+              .length ?? 0
+          const shouldRetryPauseTurn = pauseTurnFinishes > 0 && pauseTurnFinishes < PROMPT_PAUSE_TURN_RETRY_MAX
 
           if (
             lastAssistant?.finish &&
             !["tool-calls"].includes(lastAssistant.finish) &&
+            !shouldRetryPauseTurn &&
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {

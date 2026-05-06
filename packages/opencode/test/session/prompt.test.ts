@@ -347,6 +347,55 @@ it.live("loop exits immediately when last assistant has stop finish", () =>
   ),
 )
 
+it.live("loop retries a stored raw pause_turn stop before treating it as final", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: seeded.assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        tool: "web_search",
+        callID: "server-tool-1",
+        state: {
+          status: "completed",
+          input: { query: "pause turn" },
+          output: "server result",
+          metadata: {},
+          title: "server result",
+          time: { start: 1, end: 2 },
+        },
+        metadata: { providerExecuted: true },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: seeded.assistant.id,
+        sessionID: chat.id,
+        type: "step-finish",
+        reason: "stop",
+        rawReason: "pause_turn",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      yield* llm.text("recovered")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(yield* llm.calls).toBe(1)
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "recovered")).toBe(true)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
 it.live("loop calls LLM and returns assistant message", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {

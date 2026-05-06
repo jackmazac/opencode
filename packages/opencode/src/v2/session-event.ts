@@ -116,6 +116,7 @@ export namespace Step {
     schema: {
       ...Base,
       finish: Schema.String,
+      rawFinish: Schema.String.pipe(Schema.optional),
       cost: Schema.Finite,
       tokens: Schema.Struct({
         input: NonNegativeInt,

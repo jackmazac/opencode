@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { ProviderTransform } from "@/provider/transform"
 import { ModelID, ProviderID } from "../../src/provider/schema"
+import type * as Provider from "../../src/provider/provider"
 
 describe("ProviderTransform.options - setCacheKey", () => {
   const sessionID = "test-session-123"
@@ -170,6 +171,102 @@ describe("ProviderTransform.options - zai/zhipuai thinking", () => {
       })
     })
   }
+})
+
+describe("ProviderTransform.variants - Anthropic adaptive thinking display", () => {
+  const createClaudeModel = (input: {
+    npm: string
+    modelID: string
+    providerID: string
+    apiID: string
+  }): Provider.Model => ({
+    id: ModelID.make(input.modelID),
+    providerID: ProviderID.make(input.providerID),
+    api: {
+      id: input.apiID,
+      url: "https://example.com",
+      npm: input.npm,
+    },
+    name: input.apiID,
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: true },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: {
+      input: 0.001,
+      output: 0.002,
+      cache: { read: 0.0001, write: 0.0002 },
+    },
+    limit: {
+      context: 200000,
+      output: 32000,
+    },
+    status: "active",
+    options: {},
+    headers: {},
+    release_date: "2026-01-01",
+  })
+
+  test("sets summarized thinking display for Gateway Anthropic Opus 4.7", () => {
+    const result = ProviderTransform.variants(
+      createClaudeModel({
+        npm: "@ai-sdk/gateway",
+        providerID: "opencode",
+        modelID: "anthropic/claude-opus-4.7",
+        apiID: "anthropic/claude-opus-4.7",
+      }),
+    )
+
+    expect(result.high).toEqual({
+      thinking: {
+        type: "adaptive",
+        display: "summarized",
+      },
+      effort: "high",
+    })
+  })
+
+  test("keeps Gateway Anthropic Sonnet 4.6 adaptive thinking without display override", () => {
+    const result = ProviderTransform.variants(
+      createClaudeModel({
+        npm: "@ai-sdk/gateway",
+        providerID: "opencode",
+        modelID: "anthropic/claude-sonnet-4.6",
+        apiID: "anthropic/claude-sonnet-4.6",
+      }),
+    )
+
+    expect(result.high).toEqual({
+      thinking: {
+        type: "adaptive",
+      },
+      effort: "high",
+    })
+  })
+
+  test("keeps direct Anthropic Opus 4.7 summarized display behavior", () => {
+    const result = ProviderTransform.variants(
+      createClaudeModel({
+        npm: "@ai-sdk/anthropic",
+        providerID: "anthropic",
+        modelID: "anthropic/claude-opus-4.7",
+        apiID: "claude-opus-4.7",
+      }),
+    )
+
+    expect(result.high).toEqual({
+      thinking: {
+        type: "adaptive",
+        display: "summarized",
+      },
+      effort: "high",
+    })
+  })
 })
 
 describe("ProviderTransform.options - google thinkingConfig gating", () => {
@@ -2473,12 +2570,14 @@ describe("ProviderTransform.variants", () => {
       expect(result.xhigh).toEqual({
         thinking: {
           type: "adaptive",
+          display: "summarized",
         },
         effort: "xhigh",
       })
       expect(result.max).toEqual({
         thinking: {
           type: "adaptive",
+          display: "summarized",
         },
         effort: "max",
       })

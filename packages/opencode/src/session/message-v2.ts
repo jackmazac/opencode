@@ -267,6 +267,7 @@ export const StepFinishPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("step-finish"),
   reason: Schema.String,
+  rawReason: Schema.optional(Schema.String),
   snapshot: Schema.optional(Schema.String),
   cost: Schema.Finite,
   tokens: Schema.Struct({
