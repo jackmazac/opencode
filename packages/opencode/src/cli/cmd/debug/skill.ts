@@ -9,7 +9,12 @@ export const SkillCommand = effectCmd({
   builder: (yargs) => yargs,
   handler: Effect.fn("Cli.debug.skill")(function* () {
     const skill = yield* Skill.Service
-    const skills = yield* skill.all()
-    process.stdout.write(JSON.stringify(skills, null, 2) + EOL)
+    const catalog = yield* skill.all()
+    const merged = yield* Effect.forEach(
+      catalog,
+      (item) => skill.get(item.name).pipe(Effect.map((loaded) => loaded ?? item)),
+      { concurrency: "unbounded" },
+    )
+    process.stdout.write(JSON.stringify(merged, null, 2) + EOL)
   }),
 })

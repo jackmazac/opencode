@@ -6,6 +6,7 @@ import { Skill } from "../../src/skill"
 import { Permission } from "../../src/permission"
 import { SystemPrompt } from "../../src/session/system"
 import { testEffect } from "../lib/effect"
+import { TestConfig } from "../fixture/config"
 
 const skills: Skill.Info[] = [
   {
@@ -42,6 +43,7 @@ const build: Agent.Info = {
 
 const it = testEffect(
   SystemPrompt.layer.pipe(
+    Layer.provide(TestConfig.layer()),
     Layer.provide(
       Layer.succeed(
         Skill.Service,
@@ -50,6 +52,23 @@ const it = testEffect(
           all: () => Effect.succeed(skills),
           dirs: () => Effect.succeed([]),
           available: () => Effect.succeed(skills),
+        }),
+      ),
+    ),
+  ),
+)
+
+const itSkillsDisabled = testEffect(
+  SystemPrompt.layer.pipe(
+    Layer.provide(TestConfig.layer({ get: () => Effect.succeed({ skills: { enabled: false } }) })),
+    Layer.provide(
+      Layer.succeed(
+        Skill.Service,
+        Skill.Service.of({
+          get: () => Effect.succeed(undefined),
+          all: () => Effect.succeed([]),
+          dirs: () => Effect.succeed([]),
+          available: () => Effect.succeed([]),
         }),
       ),
     ),
@@ -74,6 +93,13 @@ describe("session.system", () => {
       expect(middle).toBeGreaterThan(alpha)
       expect(zeta).toBeGreaterThan(middle)
       expect(output).not.toContain("manual-skill")
+    }),
+  )
+
+  itSkillsDisabled.effect("skills output is omitted when skills.enabled is false", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      expect(yield* prompt.skills(build)).toBeUndefined()
     }),
   )
 })

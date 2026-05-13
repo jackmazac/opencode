@@ -2,6 +2,9 @@ import type { Config } from "@/config/config"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import type { MessageV2 } from "./message-v2"
+import * as Log from "@opencode-ai/core/util/log"
+
+const log = Log.create({ service: "compaction" })
 
 const COMPACTION_BUFFER = 20_000
 
@@ -22,5 +25,18 @@ export function isOverflow(input: { cfg: Config.Info; tokens: MessageV2.Assistan
 
   const count =
     input.tokens.total || input.tokens.input + input.tokens.output + input.tokens.cache.read + input.tokens.cache.write
-  return count >= usable(input)
+  const budget = usable(input)
+  const reserved =
+    input.cfg.compaction?.reserved ?? Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model))
+  const over = count >= budget
+  if (over) {
+    log.info("context overflow threshold", {
+      totalTokens: count,
+      usableTokens: budget,
+      contextLimit: input.model.limit.context,
+      reserved,
+      formula: input.cfg.compaction?.reserved !== undefined ? "cfg.reserved" : "default_reserved",
+    })
+  }
+  return over
 }

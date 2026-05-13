@@ -552,7 +552,19 @@ describe("OpenAI Responses route", () => {
         Effect.provide(fixedResponse(sseEvents({ type: "error", code: "rate_limit_exceeded", message: "Slow down" }))),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "Slow down" }])
+      expect(response.events).toHaveLength(1)
+      expect(response.events[0]).toMatchObject({ type: "provider-error", message: "Slow down" })
+      expect(response.events[0]).toEqual(
+        expect.objectContaining({
+          providerMetadata: {
+            openai: expect.objectContaining({
+              protocol: "openai-responses",
+              streamEventType: "error",
+              openaiCode: "rate_limit_exceeded",
+            }),
+          },
+        }),
+      )
     }),
   )
 
@@ -562,7 +574,50 @@ describe("OpenAI Responses route", () => {
         Effect.provide(fixedResponse(sseEvents({ type: "error", code: "internal_error" }))),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "internal_error" }])
+      expect(response.events[0]).toMatchObject({ type: "provider-error", message: "internal_error" })
+      expect(response.events[0]).toEqual(
+        expect.objectContaining({
+          providerMetadata: {
+            openai: expect.objectContaining({
+              protocol: "openai-responses",
+              streamEventType: "error",
+              openaiCode: "internal_error",
+            }),
+          },
+        }),
+      )
+    }),
+  )
+
+  it.effect("preserves sequence_number and nested error in provider-error metadata", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "error",
+              sequence_number: 3,
+              message: "The server had an error. req_abc123xyz",
+              error: { type: "server_error", param: null, code: null },
+            }),
+          ),
+        ),
+      )
+
+      expect(response.events[0]).toMatchObject({
+        type: "provider-error",
+        message: "The server had an error. req_abc123xyz",
+      })
+      const meta = response.events[0].type === "provider-error" ? response.events[0].providerMetadata?.openai : undefined
+      expect(meta).toMatchObject({
+        protocol: "openai-responses",
+        streamEventType: "error",
+        sequenceNumber: 3,
+        nestedErrorType: "server_error",
+        requestId: "req_abc123xyz",
+      })
+      expect(typeof meta?.nestedErrorJsonLength).toBe("number")
+      expect(meta?.nestedErrorJsonLength).toBeGreaterThan(0)
     }),
   )
 

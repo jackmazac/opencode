@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { Auth, type Auth as AuthDef } from "../auth"
 import { type Endpoint, render as renderEndpoint } from "../endpoint"
@@ -101,22 +101,43 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
     ),
   frames: (prepared, request, runtime) =>
     Stream.unwrap(
-      runtime.http
-        .execute(prepared.request)
-        .pipe(
-          Effect.map((response) =>
-            prepared.framing.frame(
-              response.stream.pipe(
-                Stream.mapError((error) =>
-                  ProviderShared.eventError(
-                    `${request.model.provider}/${request.model.route}`,
-                    `Failed to read ${request.model.provider}/${request.model.route} stream`,
-                    ProviderShared.errorText(error),
-                  ),
-                ),
+      Effect.gen(function* () {
+        if (process.env.OPENCODE_LLM_WIRE_LOG === "1") {
+          let requestHost = ""
+          let pathWithQuery = ""
+          try {
+            const urlOpt = HttpClientRequest.toUrl(prepared.request)
+            const href = Option.isSome(urlOpt) ? urlOpt.value.href : String(prepared.request.url)
+            const url = new URL(href)
+            requestHost = url.host
+            pathWithQuery = `${url.pathname}${url.search}`
+          } catch {
+            requestHost = "(unparsed)"
+            pathWithQuery = String(prepared.request.url)
+          }
+          const md = request.metadata
+          const fromMeta =
+            md && ProviderShared.isRecord(md) && typeof md.llmRequestId === "string" ? md.llmRequestId : undefined
+          yield* Effect.logInfo("llm wire stream start", {
+            routeId: request.model.route,
+            providerId: request.model.provider,
+            requestHost,
+            path: pathWithQuery,
+            llmRequestId: fromMeta ?? request.id,
+          })
+        }
+        const res = yield* runtime.http.execute(prepared.request)
+        return prepared.framing.frame(
+          res.stream.pipe(
+            Stream.mapError((error) =>
+              ProviderShared.eventError(
+                `${request.model.provider}/${request.model.route}`,
+                `Failed to read ${request.model.provider}/${request.model.route} stream`,
+                ProviderShared.errorText(error),
               ),
             ),
           ),
-        ),
+        )
+      }),
     ),
 })

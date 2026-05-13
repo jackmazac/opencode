@@ -72,6 +72,8 @@ export const NameMismatchError = NamedError.create("SkillNameMismatchError", {
 type State = {
   skills: Record<string, Info>
   dirs: Set<string>
+  /** Disk skills omit body until Stage B; built-in is loaded in Stage A. */
+  bodyLoaded: Set<string>
 }
 
 type DiscoveryState = {
@@ -91,7 +93,7 @@ export interface Interface {
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
 }
 
-const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.Interface) {
+const addCatalogEntry = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.Interface) {
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),
     catch: (err) => err,
@@ -121,13 +123,63 @@ const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.I
     })
   }
 
+  state.bodyLoaded.delete(md.data.name)
   state.dirs.add(path.dirname(match))
   state.skills[md.data.name] = {
     name: md.data.name,
     description: md.data.description,
     location: match,
+    content: "",
+  }
+})
+
+const ensureSkillBody = Effect.fnUntraced(function* (state: State, name: string, bus: Bus.Interface) {
+  if (state.bodyLoaded.has(name)) return
+
+  const entry = state.skills[name]
+  if (!entry) return
+
+  if (entry.location === "<built-in>") {
+    state.bodyLoaded.add(name)
+    return
+  }
+
+  const md = yield* Effect.tryPromise({
+    try: () => ConfigMarkdown.parse(entry.location),
+    catch: (err) => err,
+  }).pipe(
+    Effect.catch(
+      Effect.fnUntraced(function* (err) {
+        const message = ConfigMarkdown.FrontmatterError.isInstance(err)
+          ? err.data.message
+          : `Failed to parse skill ${entry.location}`
+        const { Session } = yield* Effect.promise(() => import("@/session/session"))
+        yield* bus.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
+        log.error("failed to load skill body", { skill: name, err })
+        return undefined
+      }),
+    ),
+  )
+
+  if (!md) return
+
+  if (!isSkillFrontmatter(md.data)) return
+
+  if (md.data.name !== name) {
+    log.warn("skill name mismatch between catalog and body parse", {
+      catalogName: name,
+      frontmatterName: md.data.name,
+      path: entry.location,
+    })
+  }
+
+  state.skills[name] = {
+    name: md.data.name,
+    description: md.data.description,
+    location: entry.location,
     content: md.content,
   }
+  state.bodyLoaded.add(name)
 })
 
 const scan = Effect.fnUntraced(function* (
@@ -220,8 +272,8 @@ const discoverSkills = Effect.fnUntraced(function* (
   }
 })
 
-const loadSkills = Effect.fnUntraced(function* (state: State, discovered: DiscoveryState, bus: Bus.Interface) {
-  yield* Effect.forEach(discovered.matches, (match) => add(state, match, bus), {
+const loadSkillCatalog = Effect.fnUntraced(function* (state: State, discovered: DiscoveryState, bus: Bus.Interface) {
+  yield* Effect.forEach(discovered.matches, (match) => addCatalogEntry(state, match, bus), {
     concurrency: "unbounded",
     discard: true,
   })
@@ -241,12 +293,21 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const discovered = yield* InstanceState.make(
       Effect.fn("Skill.discovery")(function* (ctx) {
+        const cfg = yield* config.get()
+        if (cfg.skills?.enabled === false) {
+          return { matches: [] as string[], dirs: [] as string[] }
+        }
         return yield* discoverSkills(config, discovery, fsys, global, ctx.directory, ctx.worktree)
       }),
     )
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
-        const s: State = { skills: {}, dirs: new Set() }
+        const cfg = yield* config.get()
+        if (cfg.skills?.enabled === false) {
+          const empty: State = { skills: {}, dirs: new Set<string>(), bodyLoaded: new Set<string>() }
+          return empty
+        }
+        const s: State = { skills: {}, dirs: new Set(), bodyLoaded: new Set() }
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
         s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
@@ -255,13 +316,17 @@ export const layer = Layer.effect(
           location: "<built-in>",
           content: CUSTOMIZE_OPENCODE_SKILL_BODY,
         }
-        yield* loadSkills(s, yield* InstanceState.get(discovered), bus)
+        s.bodyLoaded.add(CUSTOMIZE_OPENCODE_SKILL_NAME)
+        yield* loadSkillCatalog(s, yield* InstanceState.get(discovered), bus)
         return s
       }),
     )
 
     const get = Effect.fn("Skill.get")(function* (name: string) {
       const s = yield* InstanceState.get(state)
+      const entry = s.skills[name]
+      if (!entry) return undefined
+      yield* ensureSkillBody(s, name, bus)
       return s.skills[name]
     })
 

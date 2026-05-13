@@ -146,6 +146,10 @@ export const Info = Schema.Struct({
   }),
   // User-facing plugin config is stored as Specs; provenance gets attached later while configs are merged.
   plugin: Schema.optional(Schema.mutable(Schema.Array(ConfigPlugin.Spec))),
+  mcp_enabled: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "When false, OpenCode never connects MCP servers (global off). Per-server enabled still applies when true. Default true when omitted.",
+  }),
   share: Schema.optional(Schema.Literals(["manual", "auto", "disabled"])).annotate({
     description:
       "Control sharing behavior:'manual' allows manual sharing via commands, 'auto' enables automatic sharing, 'disabled' disables all sharing",

@@ -69,6 +69,9 @@ Instructions here.
           expect(item).toBeDefined()
           expect(item!.description).toBe("A test skill for verification.")
           expect(item!.location).toContain(path.join("skill", "test-skill", "SKILL.md"))
+          expect(item!.content).toBe("")
+          const loaded = yield* skill.get("test-skill")
+          expect(loaded?.content).toContain("Instructions here.")
         }),
       { git: true },
     ),
@@ -417,6 +420,57 @@ description: A skill in the .opencode/skills directory.
           expect((yield* skill.dirs()).length).toBe(4)
         }),
       { git: true },
+    ),
+  )
+
+  it.live("loads disk skill body only after get", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir, ".opencode", "skill", "lazy-skill", "SKILL.md"),
+              `---
+name: lazy-skill
+description: Catalog-only until get.
+---
+
+# Lazy skill body line.
+`,
+            ),
+          )
+
+          const skill = yield* Skill.Service
+          const cat = (yield* skill.all()).find((s) => s.name === "lazy-skill")
+          expect(cat).toBeDefined()
+          expect(cat!.content).toBe("")
+          const loaded = yield* skill.get("lazy-skill")
+          expect(loaded?.content).toContain("Lazy skill body line.")
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("skills.enabled false skips discovery", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir, ".opencode", "skill", "gone-skill", "SKILL.md"),
+              `---
+name: gone-skill
+description: Should not appear.
+---
+`,
+            ),
+          )
+
+          const skill = yield* Skill.Service
+          expect(yield* skill.all()).toEqual([])
+          expect((yield* skill.dirs()).length).toBe(0)
+        }),
+      { git: true, config: { skills: { enabled: false } } },
     ),
   )
 })

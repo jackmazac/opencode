@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto"
 import { Provider } from "@/provider/provider"
 import * as Log from "@opencode-ai/core/util/log"
 import { Context, Effect, Layer, Record } from "effect"
+import { ulid } from "ulid"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool, tool, jsonSchema } from "ai"
 import { mergeDeep } from "remeda"
@@ -33,6 +35,29 @@ type Result = Awaited<ReturnType<typeof streamText>>
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
   mergeDeep(target, source ?? {}) as Record<string, any>
 
+const textLenFromContentPart = (part: unknown): number => {
+  if (!part || typeof part !== "object") return 0
+  if (!("text" in part)) return 0
+  const t = part.text
+  return typeof t === "string" ? t.length : 0
+}
+
+/** Rough character budget for logs (not exact token count). */
+function estimatePromptChars(system: string[], messages: ModelMessage[]): number {
+  let n = 0
+  for (const s of system) n += s.length
+  for (const m of messages) {
+    const c = m.content
+    if (typeof c === "string") {
+      n += c.length
+      continue
+    }
+    if (!Array.isArray(c)) continue
+    for (const part of c) n += textLenFromContentPart(part)
+  }
+  return n
+}
+
 export type StreamInput = {
   user: MessageV2.User
   sessionID: string
@@ -51,6 +76,7 @@ export type StreamInput = {
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
   pauseTurnContinuation?: number
+  llmRequestId: string
 }
 
 export type Event = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
@@ -88,6 +114,7 @@ const live: Layer.Layer<
         modelID: input.model.id,
         providerID: input.model.providerID,
         pauseTurnContinuation: input.pauseTurnContinuation ?? 0,
+        llmRequestId: input.llmRequestId,
       })
 
       const [language, cfg, item, info] = yield* Effect.all(
@@ -229,6 +256,33 @@ const live: Layer.Layer<
         })
       }
       const sortedTools = Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b)))
+      const toolNamesHash = createHash("sha256")
+        .update(Object.keys(sortedTools).join("\0"))
+        .digest("hex")
+        .slice(0, 16)
+
+      if (process.env.OPENCODE_LLM_REQUEST_FINGERPRINT === "1") {
+        const FINGERPRINT_WARN_BYTES = 400_000
+        let toolsSchemaBytesEstimate = 0
+        for (const name of Object.keys(sortedTools)) {
+          toolsSchemaBytesEstimate += name.length
+          const t = sortedTools[name]
+          if (t && typeof t === "object" && "description" in t && typeof t.description === "string") {
+            toolsSchemaBytesEstimate += Math.min(t.description.length, 2000)
+          }
+        }
+        const systemPartsCount = system.length
+        const userTurnsCount = messages.filter((m) => m.role === "user").length
+        if (toolsSchemaBytesEstimate > FINGERPRINT_WARN_BYTES) {
+          l.warn("llm request fingerprint: large tool surface", {
+            llmRequestId: input.llmRequestId,
+            toolCount: Object.keys(sortedTools).length,
+            toolsSchemaBytesEstimate,
+            systemPartsCount,
+            userTurnsCount,
+          })
+        }
+      }
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -327,6 +381,7 @@ const live: Layer.Layer<
               return (...args: Parameters<typeof target.startSpan>) => {
                 const span = target.startSpan(...args)
                 span.setAttribute("session.id", input.sessionID)
+                span.setAttribute("llm.request_id", input.llmRequestId)
                 return span
               }
             },
@@ -339,8 +394,23 @@ const live: Layer.Layer<
 
       return streamText({
         onError(error) {
+          const verbose = cfg.experimental?.openTelemetry === true || process.env.OPENCODE_LLM_DEBUG === "1"
+          const errFields: Record<string, unknown> = {}
+          if (error instanceof Error) {
+            errFields.errorName = error.name
+            errFields.errorMessage = error.message
+            if (verbose && error.stack !== undefined) errFields.errorStack = error.stack
+          } else {
+            errFields.errorValue = String(error)
+          }
           l.error("stream error", {
-            error,
+            llmRequestId: input.llmRequestId,
+            pauseTurnContinuation: input.pauseTurnContinuation ?? 0,
+            activeToolCount: Object.keys(sortedTools).length,
+            toolNamesHash,
+            messagesCount: messages.length,
+            promptCharEstimate: estimatePromptChars(system, messages),
+            ...errFields,
           })
         },
         async experimental_repairToolCall(failed) {
@@ -415,6 +485,7 @@ const live: Layer.Layer<
             userId: cfg.username ?? "unknown",
             sessionId: input.sessionID,
             pauseTurnContinuation: input.pauseTurnContinuation ?? 0,
+            llmRequestId: input.llmRequestId,
           },
         },
       })
@@ -426,6 +497,13 @@ const live: Layer.Layer<
       continuation: number,
     ): Effect.Effect<Stream.Stream<Event, unknown>, unknown> {
       return Effect.gen(function* () {
+        log.info("llm stream segment", {
+          llmRequestId: input.llmRequestId,
+          pauseTurnSegment: continuation,
+          sessionID: input.sessionID,
+          providerID: input.model.providerID,
+          modelID: input.model.id,
+        })
         const result = yield* run({ ...input, messages, pauseTurnContinuation: continuation })
         let rawFinishReason: string | undefined
         const current = Stream.fromAsyncIterable(result.fullStream, (e) =>
@@ -480,7 +558,8 @@ const live: Layer.Layer<
               (ctrl) => Effect.sync(() => ctrl.abort()),
             )
 
-            return yield* continuePauseTurn({ ...input, abort: ctrl.signal }, input.messages, 0)
+            const llmRequestId = ulid()
+            return yield* continuePauseTurn({ ...input, abort: ctrl.signal, llmRequestId }, input.messages, 0)
           }),
         ),
       )

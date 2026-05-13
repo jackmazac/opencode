@@ -664,6 +664,69 @@ it.instance(
   { config: { mcp: {} } },
 )
 
+it.instance(
+  "does not create MCP clients until status() or tools()",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        const countBefore = clientCreateCount
+        lastCreatedClientName = "lazy-init-server"
+        getOrCreateClientState("lazy-init-server")
+
+        expect(clientCreateCount).toBe(countBefore)
+
+        yield* mcp.status()
+        expect(clientCreateCount).toBeGreaterThan(countBefore)
+
+        const countAfterStatus = clientCreateCount
+        yield* mcp.tools()
+        expect(clientCreateCount).toBe(countAfterStatus)
+      }),
+    ),
+  {
+    config: {
+      mcp: {
+        "lazy-init-server": {
+          type: "local",
+          command: ["echo", "test"],
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "mcp_enabled false never creates clients and status reports disabled",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        const countBefore = clientCreateCount
+        lastCreatedClientName = "off-server"
+        getOrCreateClientState("off-server")
+
+        yield* mcp.status()
+        expect(clientCreateCount).toBe(countBefore)
+
+        const st = yield* mcp.status()
+        expect(st["off-server"]?.status).toBe("disabled")
+
+        const tools = yield* mcp.tools()
+        expect(Object.keys(tools).length).toBe(0)
+      }),
+    ),
+  {
+    config: {
+      mcp_enabled: false,
+      mcp: {
+        "off-server": {
+          type: "local",
+          command: ["echo", "test"],
+        },
+      },
+    },
+  },
+)
+
 // ========================================================================
 // Test: tools() with no MCP servers configured
 // ========================================================================

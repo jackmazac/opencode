@@ -207,8 +207,9 @@ export const layer: Layer.Layer<
           }
         }
 
-        yield* config.get()
+        const cfgSnapshot = yield* config.get()
         const questionEnabled = ["app", "cli", "desktop"].includes(flags.client) || flags.enableQuestionTool
+        const skillsToolEnabled = cfgSnapshot.skills?.enabled !== false
 
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
@@ -224,12 +225,13 @@ export const layer: Layer.Layer<
           search: Tool.init(websearch),
           repo_clone: Tool.init(repoClone),
           repo_overview: Tool.init(repoOverview),
-          skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
         })
+
+        const skillDef = skillsToolEnabled ? yield* Tool.init(skilltool) : undefined
 
         return {
           custom,
@@ -247,7 +249,7 @@ export const layer: Layer.Layer<
             tool.todo,
             tool.search,
             ...(flags.experimentalScout ? [tool.repo_clone, tool.repo_overview] : []),
-            tool.skill,
+            ...(skillDef ? [skillDef] : []),
             tool.patch,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),

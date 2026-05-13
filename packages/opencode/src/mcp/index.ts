@@ -233,6 +233,7 @@ interface State {
   status: Record<string, Status>
   clients: Record<string, MCPClient>
   defs: Record<string, MCPToolDef[]>
+  connectBatchDone: boolean
 }
 
 export interface Interface {
@@ -444,7 +445,15 @@ export const layer = Layer.effect(
       )
     })
 
+    const cfgSvc = yield* Config.Service
+
     const create = Effect.fn("MCP.create")(function* (key: string, mcp: ConfigMCP.Info) {
+      const cfg = yield* cfgSvc.get()
+      if (cfg.mcp_enabled === false) {
+        log.info("mcp globally disabled", { key })
+        return DISABLED_RESULT
+      }
+
       if (mcp.enabled === false) {
         log.info("mcp server disabled", { key })
         return DISABLED_RESULT
@@ -470,7 +479,6 @@ export const layer = Layer.effect(
       log.info("create() successfully created client", { key, toolCount: listed.length })
       return { mcpClient, status, defs: listed } satisfies CreateResult
     })
-    const cfgSvc = yield* Config.Service
 
     const descendants = Effect.fnUntraced(
       function* (pid: number) {
@@ -512,41 +520,12 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("MCP.state")(function* () {
-        const cfg = yield* cfgSvc.get()
-        const bridge = yield* EffectBridge.make()
-        const config = cfg.mcp ?? {}
         const s: State = {
           status: {},
           clients: {},
           defs: {},
+          connectBatchDone: false,
         }
-
-        yield* Effect.forEach(
-          Object.entries(config),
-          ([key, mcp]) =>
-            Effect.gen(function* () {
-              if (!isMcpConfigured(mcp)) {
-                log.error("Ignoring MCP config entry without type", { key })
-                return
-              }
-
-              if (mcp.enabled === false) {
-                s.status[key] = { status: "disabled" }
-                return
-              }
-
-              const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.void))
-              if (!result) return
-
-              s.status[key] = result.status
-              if (result.mcpClient) {
-                s.clients[key] = result.mcpClient
-                s.defs[key] = result.defs!
-                watch(s, key, result.mcpClient, bridge, mcp.timeout)
-              }
-            }),
-          { concurrency: "unbounded" },
-        )
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
@@ -575,6 +554,66 @@ export const layer = Layer.effect(
       }),
     )
 
+    const ensureConnectedAll = Effect.fn("MCP.ensureConnectedAll")(function* () {
+      const s = yield* InstanceState.get(state)
+      if (s.connectBatchDone) return
+      s.connectBatchDone = true
+
+      const cfg = yield* cfgSvc.get()
+      const config = cfg.mcp ?? {}
+
+      if (cfg.mcp_enabled === false) {
+        for (const [key, mcp] of Object.entries(config)) {
+          if (!isMcpConfigured(mcp)) continue
+          if (s.status[key]) continue
+          s.status[key] = { status: "disabled" }
+        }
+        return
+      }
+
+      const bridge = yield* EffectBridge.make()
+      yield* Effect.forEach(
+        Object.entries(config),
+        ([key, mcp]) =>
+          Effect.gen(function* () {
+            if (!isMcpConfigured(mcp)) {
+              log.error("Ignoring MCP config entry without type", { key })
+              return
+            }
+
+            if (mcp.enabled === false) {
+              s.status[key] = { status: "disabled" }
+              return
+            }
+
+            if (s.status[key]?.status === "connected" && s.clients[key]) {
+              return
+            }
+
+            const terminal = s.status[key]?.status
+            if (
+              terminal === "disabled" ||
+              terminal === "failed" ||
+              terminal === "needs_auth" ||
+              terminal === "needs_client_registration"
+            ) {
+              return
+            }
+
+            const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.void))
+            if (!result) return
+
+            s.status[key] = result.status
+            if (result.mcpClient) {
+              s.clients[key] = result.mcpClient
+              s.defs[key] = result.defs!
+              watch(s, key, result.mcpClient, bridge, mcp.timeout)
+            }
+          }),
+        { concurrency: "unbounded" },
+      )
+    })
+
     function closeClient(s: State, name: string) {
       const client = s.clients[name]
       delete s.defs[name]
@@ -599,6 +638,7 @@ export const layer = Layer.effect(
     })
 
     const status = Effect.fn("MCP.status")(function* () {
+      yield* ensureConnectedAll()
       const s = yield* InstanceState.get(state)
 
       const cfg = yield* cfgSvc.get()
@@ -614,6 +654,7 @@ export const layer = Layer.effect(
     })
 
     const clients = Effect.fn("MCP.clients")(function* () {
+      yield* ensureConnectedAll()
       const s = yield* InstanceState.get(state)
       return s.clients
     })
@@ -655,6 +696,7 @@ export const layer = Layer.effect(
     })
 
     const tools = Effect.fn("MCP.tools")(function* () {
+      yield* ensureConnectedAll()
       const result: Record<string, Tool> = {}
       const s = yield* InstanceState.get(state)
 
@@ -703,11 +745,13 @@ export const layer = Layer.effect(
     }
 
     const prompts = Effect.fn("MCP.prompts")(function* () {
+      yield* ensureConnectedAll()
       const s = yield* InstanceState.get(state)
       return yield* collectFromConnected(s, (c) => c.listPrompts().then((r) => r.prompts), "prompts")
     })
 
     const resources = Effect.fn("MCP.resources")(function* () {
+      yield* ensureConnectedAll()
       const s = yield* InstanceState.get(state)
       return yield* collectFromConnected(s, (c) => c.listResources().then((r) => r.resources), "resources")
     })
@@ -718,6 +762,7 @@ export const layer = Layer.effect(
       label: string,
       meta?: Record<string, unknown>,
     ) {
+      yield* ensureConnectedAll()
       const s = yield* InstanceState.get(state)
       const client = s.clients[clientName]
       if (!client) {

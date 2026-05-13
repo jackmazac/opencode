@@ -227,6 +227,26 @@ test("loads shell config field", async () => {
   })
 })
 
+test("loads skills.enabled and mcp_enabled from project config", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await writeConfig(dir, {
+        $schema: "https://opencode.ai/config.json",
+        skills: { enabled: false },
+        mcp_enabled: false,
+      })
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await load()
+      expect(config.skills?.enabled).toBe(false)
+      expect(config.mcp_enabled).toBe(false)
+    },
+  })
+})
+
 test("updates config and preserves empty shell sentinel", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

@@ -138,14 +138,14 @@ export const layer = Layer.effect(
         }
       }
 
-      for (const item of yield* skill.all()) {
+      for (const item of cfg.skills?.enabled === false ? [] : yield* skill.all()) {
         if (commands[item.name]) continue
         commands[item.name] = {
           name: item.name,
           description: item.description,
           source: "skill",
           get template() {
-            return item.content
+            return bridge.promise(skill.get(item.name).pipe(Effect.map((i) => i?.content ?? "")))
           },
           hints: [],
         }

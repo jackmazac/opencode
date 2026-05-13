@@ -1,6 +1,9 @@
 import { Schema } from "effect"
 
 export const Info = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean).annotate({
+    description: "When false, disables skill discovery, catalog, and the skill tool (default: true)",
+  }),
   paths: Schema.optional(Schema.Array(Schema.String)).annotate({
     description: "Additional paths to skill folders",
   }),

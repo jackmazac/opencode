@@ -156,12 +156,64 @@ const OpenAIResponsesEvent = Schema.Struct({
       service_tier: Schema.optional(Schema.String),
       incomplete_details: optionalNull(Schema.Struct({ reason: Schema.String })),
       usage: optionalNull(OpenAIResponsesUsage),
+      error: Schema.optional(Schema.Unknown),
     }),
   ),
   code: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
+  sequence_number: Schema.optional(Schema.Number),
+  /** Top-level stream error object (e.g. `{ type: "server_error", ... }`). */
+  error: Schema.optional(Schema.Unknown),
 })
 type OpenAIResponsesEvent = Schema.Schema.Type<typeof OpenAIResponsesEvent>
+
+const extractOpenAiRequestId = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    const m = /req_[A-Za-z0-9]+/.exec(value)
+    return m ? m[0] : undefined
+  }
+  if (!ProviderShared.isRecord(value)) return undefined
+  for (const v of Object.values(value)) {
+    const found = extractOpenAiRequestId(v)
+    if (found) return found
+  }
+  return undefined
+}
+
+const nestedStreamErrorType = (error: unknown): string | undefined => {
+  if (!ProviderShared.isRecord(error)) return undefined
+  const t = error.type
+  return typeof t === "string" ? t : undefined
+}
+
+/** Structured metadata for provider-error events (logging / correlation). */
+const streamFailureProviderMetadata = (event: OpenAIResponsesEvent): ProviderMetadata => {
+  const nested = event.error ?? event.response?.error
+  const nestedType = nestedStreamErrorType(nested)
+  const messageStr = typeof event.message === "string" ? event.message : undefined
+  const requestId =
+    extractOpenAiRequestId(nested) ?? (messageStr ? extractOpenAiRequestId(messageStr) : undefined)
+
+  const meta: Record<string, unknown> = {
+    protocol: ADAPTER,
+    streamEventType: event.type,
+  }
+  if (event.sequence_number !== undefined) meta.sequenceNumber = event.sequence_number
+  if (event.code !== undefined) meta.openaiCode = event.code
+  if (nestedType !== undefined) meta.nestedErrorType = nestedType
+  if (requestId !== undefined) meta.requestId = requestId
+  if (typeof event.response?.id === "string") meta.responseId = event.response.id
+  if (nested !== undefined) {
+    let size = 0
+    try {
+      size = JSON.stringify(nested).length
+    } catch {
+      size = 0
+    }
+    meta.nestedErrorJsonLength = size
+  }
+  return { openai: meta }
+}
 
 interface ParserState {
   readonly tools: ToolStream.State<string>
@@ -381,9 +433,10 @@ const NO_EVENTS: StepResult["1"] = []
 
 // `response.completed` / `response.incomplete` are clean finishes that emit a
 // `finish` event; `response.failed` is a hard failure that emits a
-// `provider-error`. All three end the stream — kept in one set so `step` and
+// `provider-error`. Mid-stream `error` events also emit `provider-error`.
+// All terminal types end the stream — kept in one set so `step` and
 // the protocol's `terminal` predicate stay in sync.
-const TERMINAL_TYPES = new Set(["response.completed", "response.incomplete", "response.failed"])
+const TERMINAL_TYPES = new Set(["response.completed", "response.incomplete", "response.failed", "error"])
 
 const onOutputTextDelta = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   if (!event.delta) return [state, NO_EVENTS]
@@ -494,12 +547,22 @@ const onResponseFinish = (state: ParserState, event: OpenAIResponsesEvent): Step
 
 const onResponseFailed = (state: ParserState, event: OpenAIResponsesEvent): StepResult => [
   state,
-  [LLMEvent.providerError({ message: event.message ?? event.code ?? "OpenAI Responses response failed" })],
+  [
+    LLMEvent.providerError({
+      message: event.message ?? event.code ?? "OpenAI Responses response failed",
+      providerMetadata: streamFailureProviderMetadata(event),
+    }),
+  ],
 ]
 
 const onError = (state: ParserState, event: OpenAIResponsesEvent): StepResult => [
   state,
-  [LLMEvent.providerError({ message: event.message ?? event.code ?? "OpenAI Responses stream error" })],
+  [
+    LLMEvent.providerError({
+      message: event.message ?? event.code ?? "OpenAI Responses stream error",
+      providerMetadata: streamFailureProviderMetadata(event),
+    }),
+  ],
 ]
 
 const step = (state: ParserState, event: OpenAIResponsesEvent) => {
