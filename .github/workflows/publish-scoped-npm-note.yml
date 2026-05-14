@@ -1,0 +1,17 @@
+# Optional: reminds maintainers where scoped npm publishing lives.
+# A full multi-platform `dist/` requires the main build pipeline (see packages/opencode/script/build.ts).
+name: publish-scoped-npm-note
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scoped npm publish docs
+        run: |
+          echo "Read packages/opencode/docs/npm-scoped-publish.md"
+          echo "Local: bun run build in packages/opencode, then bun run publish:scoped"
+          test -f packages/opencode/docs/npm-scoped-publish.md

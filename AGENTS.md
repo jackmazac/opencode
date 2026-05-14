@@ -125,3 +125,8 @@ const table = sqliteTable("session", {
 ## Type Checking
 
 - Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
+
+## Fork: scoped npm CLI (`@mazac-fox`)
+
+To publish the CLI and platform packages under **`@mazac-fox`** instead of **`opencode-ai`**, see [`packages/opencode/docs/npm-scoped-publish.md`](packages/opencode/docs/npm-scoped-publish.md). Run **`bun run publish:scoped`** from **`packages/opencode`** after **`script/build.ts`** has produced **`dist/`**. The shim in **`packages/opencode/bin/opencode`** and **`script/postinstall.mjs`** resolve scoped **`optionalDependencies`** when the meta **`package.json`** **`name`** is scoped.
+

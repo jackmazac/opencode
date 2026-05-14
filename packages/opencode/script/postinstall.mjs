@@ -47,25 +47,50 @@ function detectPlatformAndArch() {
   return { platform, arch }
 }
 
+function metaPlatformScope() {
+  try {
+    const metaPath = path.join(__dirname, "package.json")
+    const parsed = JSON.parse(fs.readFileSync(metaPath, "utf8"))
+    if (typeof parsed.name === "string" && parsed.name.startsWith("@")) {
+      const slash = parsed.name.lastIndexOf("/")
+      if (slash !== -1) return parsed.name.slice(0, slash)
+    }
+  } catch {
+    // ignore
+  }
+  return ""
+}
+
+function platformPkgNames(platform, arch) {
+  const base = `opencode-${platform}-${arch}`
+  const scope = metaPlatformScope()
+  if (scope) return [`${scope}/${base}`, base]
+  return [base]
+}
+
 function findBinary() {
   const { platform, arch } = detectPlatformAndArch()
-  const packageName = `opencode-${platform}-${arch}`
   const binaryName = platform === "windows" ? "opencode.exe" : "opencode"
+  const names = platformPkgNames(platform, arch)
+  let lastError = null
+  for (const packageName of names) {
+    try {
+      const packageJsonPath = require.resolve(`${packageName}/package.json`)
+      const packageDir = path.dirname(packageJsonPath)
+      const binaryPath = path.join(packageDir, "bin", binaryName)
 
-  try {
-    // Use require.resolve to find the package
-    const packageJsonPath = require.resolve(`${packageName}/package.json`)
-    const packageDir = path.dirname(packageJsonPath)
-    const binaryPath = path.join(packageDir, "bin", binaryName)
+      if (!fs.existsSync(binaryPath)) {
+        throw new Error(`Binary not found at ${binaryPath}`)
+      }
 
-    if (!fs.existsSync(binaryPath)) {
-      throw new Error(`Binary not found at ${binaryPath}`)
+      return { binaryPath, binaryName }
+    } catch (error) {
+      lastError = error
     }
-
-    return { binaryPath, binaryName }
-  } catch (error) {
-    throw new Error(`Could not find package ${packageName}: ${error.message}`, { cause: error })
   }
+  throw new Error(`Could not find platform package (tried ${names.join(", ")}): ${lastError?.message ?? ""}`, {
+    cause: lastError,
+  })
 }
 
 async function main() {

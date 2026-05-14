@@ -120,6 +120,10 @@ For more info on how to configure OpenCode, [**head over to our docs**](https://
 
 If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
 
+### Developing this repository locally
+
+From `packages/opencode` (not the monorepo root): install deps, then `bun typecheck` and `bun test`. See [`AGENTS.md`](./AGENTS.md) for toolchain notes and guardrails.
+
 ### Building on OpenCode
 
 If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.

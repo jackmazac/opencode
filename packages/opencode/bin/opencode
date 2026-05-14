@@ -168,14 +168,38 @@ const names = (() => {
   return [base]
 })()
 
+function metaPlatformScope() {
+  try {
+    const metaPath = path.join(scriptDir, "..", "package.json")
+    const parsed = JSON.parse(fs.readFileSync(metaPath, "utf8"))
+    if (typeof parsed.name === "string" && parsed.name.startsWith("@")) {
+      const slash = parsed.name.lastIndexOf("/")
+      if (slash !== -1) return parsed.name.slice(0, slash)
+    }
+  } catch {
+    // ignore
+  }
+  return ""
+}
+
+/** Unscoped platform package folder name, e.g. opencode-darwin-arm64 */
+function platformInstallPaths(unscopedFolder) {
+  const scope = metaPlatformScope()
+  if (scope) return [`${scope}/${unscopedFolder}`, unscopedFolder]
+  return [unscopedFolder]
+}
+
 function findBinary(startDir) {
   let current = startDir
   for (;;) {
     const modules = path.join(current, "node_modules")
     if (fs.existsSync(modules)) {
       for (const name of names) {
-        const candidate = path.join(modules, name, "bin", binary)
-        if (fs.existsSync(candidate)) return candidate
+        const candidatePaths = platformInstallPaths(name)
+        for (const rel of candidatePaths) {
+          const candidate = path.join(modules, ...rel.split("/"), "bin", binary)
+          if (fs.existsSync(candidate)) return candidate
+        }
       }
     }
     const parent = path.dirname(current)
@@ -190,7 +214,10 @@ const resolved = envPath || (fs.existsSync(cached) ? cached : findBinary(scriptD
 if (!resolved) {
   console.error(
     "It seems that your package manager failed to install the right version of the opencode CLI for your platform. You can try manually installing " +
-      names.map((n) => `\"${n}\"`).join(" or ") +
+      names
+        .flatMap((n) => platformInstallPaths(n))
+        .map((n) => `\"${n}\"`)
+        .join(" or ") +
       " package",
   )
   process.exit(1)
