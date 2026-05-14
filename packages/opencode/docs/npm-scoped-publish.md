@@ -24,8 +24,10 @@ The **`bin/opencode`** shim and **`postinstall.mjs`** resolve **`@mazac-fox/open
 3. Optional environment variables:
    - **`OPENCODE_NPM_SCOPE`** — default `@mazac-fox`
    - **`OPENCODE_NPM_META_NAME`** — default `<scope>/opencode`
+   - **`OPENCODE_NPM_VERSION`** — force the published semver (otherwise preview versions from branch names are normalized: `/` → `-` so npm does not treat them as GitHub specs)
+   - **`OPENCODE_NPM_DIST_TAG`** or **`NPM_DIST_TAG`** — dist-tag (default: build channel with `/` → `-`)
 
-Re-run publish only from a **fresh `dist/`** from build; the script rewrites each platform `package.json` **`name`** to the scoped form.
+Re-run publish only from a **fresh `dist/`** from build; the script rewrites each platform `package.json` **`name`** and **`version`** (when needed for npm-safe strings).
 
 ## Upstream alignment
 

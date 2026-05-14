@@ -8,6 +8,8 @@
  * Env:
  *   OPENCODE_NPM_SCOPE — default `@mazac-fox`
  *   OPENCODE_NPM_META_NAME — default `<scope>/opencode`
+ *   OPENCODE_NPM_VERSION — override version (otherwise branch-based previews are slash-sanitized for npm)
+ *   OPENCODE_NPM_DIST_TAG — dist-tag (default: `Script.channel` with `/` → `-` for npm tag rules)
  */
 import { $ } from "bun"
 import pkg from "../package.json"
@@ -26,8 +28,23 @@ function scopedPlatformPackage(folderName: string): string {
   return `${scope}/${folderName}`
 }
 
+/** npm/pack treat "/" in versions like github specs; slashes also break tarball paths. */
+function npmPublishVersion(raw: string): string {
+  const env = process.env.OPENCODE_NPM_VERSION
+  if (typeof env === "string" && env.trim() !== "") return env.trim()
+  return raw.replace(/\//g, "-")
+}
+
+function npmDistTag(): string {
+  const env = process.env.OPENCODE_NPM_DIST_TAG ?? process.env.NPM_DIST_TAG
+  if (typeof env === "string" && env.trim() !== "") return env.trim()
+  const ch = Script.channel
+  return ch.replace(/\//g, "-")
+}
+
 async function published(name: string, version: string): Promise<boolean> {
-  return (await $`npm view ${name}@${version} version`.nothrow()).exitCode === 0
+  const r = await $`npm view ${name}@${version} version --silent`.nothrow()
+  return r.exitCode === 0 && (r.stdout ?? "").trim() === version
 }
 
 async function publishDir(dir: string, npmName: string, version: string): Promise<void> {
@@ -37,7 +54,7 @@ async function publishDir(dir: string, npmName: string, version: string): Promis
     return
   }
   await $`bun pm pack`.cwd(dir)
-  await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(dir)
+  await $`npm publish *.tgz --access public --tag ${npmDistTag()}`.cwd(dir)
 }
 
 const binaries: Record<string, string> = {}
@@ -54,8 +71,12 @@ for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" }
   if (typeof j.name !== "string" || typeof j.version !== "string") continue
 
   const scopedN = j.name.startsWith(`${scope}/`) ? j.name : scopedPlatformPackage(j.name)
-  await Bun.write(jpath, JSON.stringify({ ...j, name: scopedN }, null, 2) + "\n")
-  binaries[scopedN] = j.version
+  const publishVersion = npmPublishVersion(j.version)
+  await Bun.write(
+    jpath,
+    JSON.stringify({ ...j, name: scopedN, version: publishVersion }, null, 2) + "\n",
+  )
+  binaries[scopedN] = publishVersion
   platformDirs.push(dirName)
 }
 
