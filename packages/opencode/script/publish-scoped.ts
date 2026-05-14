@@ -42,9 +42,15 @@ function npmDistTag(): string {
   return ch.replace(/\//g, "-")
 }
 
+function shellStdoutText(stdout: string | Uint8Array<ArrayBufferLike> | undefined): string {
+  if (stdout === undefined) return ""
+  if (typeof stdout === "string") return stdout
+  return new TextDecoder().decode(stdout)
+}
+
 async function published(name: string, version: string): Promise<boolean> {
   const r = await $`npm view ${name}@${version} version --silent`.nothrow()
-  return r.exitCode === 0 && (r.stdout ?? "").trim() === version
+  return r.exitCode === 0 && shellStdoutText(r.stdout).trim() === version
 }
 
 async function publishDir(dir: string, npmName: string, version: string): Promise<void> {
